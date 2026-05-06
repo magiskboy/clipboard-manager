@@ -96,10 +96,29 @@ jobs:
         shell: msys2 {0}
         run: make CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++
 
+      - name: Prepare Windows artifacts
+        shell: pwsh
+        run: |
+          $mingwBin = "C:/msys64/mingw64/bin"
+          $runtimeDlls = @(
+            "libgcc_s_seh-1.dll",
+            "libstdc++-6.dll",
+            "libwinpthread-1.dll"
+          )
+
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Copy-Item build/clipboard-manager.exe dist/
+          foreach ($dll in $runtimeDlls) {
+            Copy-Item "$mingwBin/$dll" dist/
+          }
+
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: clipboard-manager-windows
           path: |
-            build/clipboard-manager.exe
+            dist/clipboard-manager.exe
+            dist/libgcc_s_seh-1.dll
+            dist/libstdc++-6.dll
+            dist/libwinpthread-1.dll
           if-no-files-found: error
