@@ -11,6 +11,7 @@ MESON_SETUP_ARGS := --buildtype=release -Dtests=false -Dexamples=false
 
 CC ?= cc
 CXX ?= c++
+WINDRES ?= windres
 CFLAGS ?= -std=c11 -Wall -Wextra -O2 -pipe
 LDFLAGS ?=
 LINK ?= $(CC)
@@ -58,6 +59,7 @@ ifeq ($(SRC_PLATFORM),linux.c)
 endif
 ifeq ($(SRC_PLATFORM),windows.c)
   OBJ += $(BUILD_DIR)/windows.o
+  OBJ += $(BUILD_DIR)/windows-app.res
 endif
 ifeq ($(SRC_PLATFORM),darwin.m)
   OBJ += $(BUILD_DIR)/darwin.o
@@ -131,6 +133,9 @@ $(BUILD_DIR)/linux.o: linux.c platform.h | $(BUILD_DIR)
 
 $(BUILD_DIR)/windows.o: windows.c platform.h | $(BUILD_DIR)
 	$(CC) $(ALL_CFLAGS) -c -o $@ windows.c
+
+$(BUILD_DIR)/windows-app.res: windows-app.rc assets/app.manifest assets/app-icon.ico | $(BUILD_DIR)
+	$(WINDRES) -i windows-app.rc -o $@
 
 $(BUILD_DIR)/darwin.o: darwin.m platform.h | $(BUILD_DIR)
 	$(CC) $(ALL_CFLAGS) -fobjc-arc -c -o $@ darwin.m

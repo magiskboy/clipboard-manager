@@ -1,0 +1,8 @@
+// UTF-8 resource script for the application executable.
+#pragma code_page(65001)
+
+// Embed Common Controls v6 manifest into the EXE.
+1 24 "assets/app.manifest"
+
+// Embed the app icon into the EXE.
+IDI_APP_ICON ICON "assets/app-icon.ico"

@@ -9,6 +9,8 @@
 #include <windows.h>
 #include <shellapi.h>
 
+#define IDI_APP_ICON 101
+
 #if defined(_MSC_VER) && !defined(strdup)
 #define strdup _strdup
 #endif
@@ -600,7 +602,10 @@ void platform_tray_init(uiWindow *main_win, platform_tray_show_cb show_cb,
 	s_nid.uID = 1;
 	s_nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
 	s_nid.uCallbackMessage = WM_CLIP_TRAY;
-	s_nid.hIcon = LoadIconW(NULL, (LPCWSTR)IDI_APPLICATION);
+	s_nid.hIcon = (HICON)LoadImageW(GetModuleHandleW(NULL),
+		MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE);
+	if (s_nid.hIcon == NULL)
+		s_nid.hIcon = LoadIconW(NULL, IDI_APPLICATION);
 	wcscpy(s_nid.szTip, L"Clipboard manager");
 	if (Shell_NotifyIconW(NIM_ADD, &s_nid))
 		s_tray_inited = 1;
