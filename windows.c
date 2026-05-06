@@ -605,7 +605,7 @@ void platform_tray_init(uiWindow *main_win, platform_tray_show_cb show_cb,
 	s_nid.hIcon = (HICON)LoadImageW(GetModuleHandleW(NULL),
 		MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE);
 	if (s_nid.hIcon == NULL)
-		s_nid.hIcon = LoadIconW(NULL, IDI_APPLICATION);
+		s_nid.hIcon = LoadIconW(NULL, MAKEINTRESOURCEW(32512));
 	wcscpy(s_nid.szTip, L"Clipboard manager");
 	if (Shell_NotifyIconW(NIM_ADD, &s_nid))
 		s_tray_inited = 1;
