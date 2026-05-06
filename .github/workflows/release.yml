@@ -75,21 +75,18 @@ jobs:
         shell: msys2 {0}
         run: make CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++
 
+      - name: Prepare Windows release files
+        shell: msys2 {0}
+        run: |
+          mkdir -p dist
+          cp build/clipboard-manager.exe dist/
+          cp /mingw64/bin/libgcc_s_seh-1.dll dist/
+          cp /mingw64/bin/libstdc++-6.dll dist/
+          cp /mingw64/bin/libwinpthread-1.dll dist/
+
       - name: Package Windows release
         shell: pwsh
         run: |
-          $mingwBin = "C:/msys64/mingw64/bin"
-          $runtimeDlls = @(
-            "libgcc_s_seh-1.dll",
-            "libstdc++-6.dll",
-            "libwinpthread-1.dll"
-          )
-
-          New-Item -ItemType Directory -Path dist -Force | Out-Null
-          Copy-Item build/clipboard-manager.exe dist/
-          foreach ($dll in $runtimeDlls) {
-            Copy-Item "$mingwBin/$dll" dist/
-          }
           Compress-Archive -Path dist/* -DestinationPath clipboard-manager-windows.zip -Force
           $hash = (Get-FileHash clipboard-manager-windows.zip -Algorithm SHA256).Hash.ToLower()
           "$hash  clipboard-manager-windows.zip" | Out-File -Encoding ascii clipboard-manager-windows.zip.sha256
