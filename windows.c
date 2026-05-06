@@ -5,8 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <shellapi.h>
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <shellapi.h>
 
 #if defined(_MSC_VER) && !defined(strdup)
 #define strdup _strdup
@@ -167,7 +168,6 @@ int platform_clipboard_set_text(const char *utf8)
 {
 	size_t len;
 	int wlen;
-	wchar_t *w;
 	HANDLE h;
 	wchar_t *lock;
 	int r;
