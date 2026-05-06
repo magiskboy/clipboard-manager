@@ -10,8 +10,10 @@ NINJA ?= ninja
 MESON_SETUP_ARGS := --buildtype=release -Dtests=false -Dexamples=false
 
 CC ?= cc
+CXX ?= c++
 CFLAGS ?= -std=c11 -Wall -Wextra -O2 -pipe
 LDFLAGS ?=
+LINK ?= $(CC)
 
 OS_UNAME := $(shell uname -s)
 OS_MAKE := $(OS)
@@ -31,16 +33,19 @@ else ifeq ($(OS_MAKE),Windows_NT)
   PLATFORM_CFLAGS :=
   PLATFORM_LDFLAGS := -lshell32 -luser32 -lkernel32 -lgdi32 -lcomctl32 -luxtheme -lmsimg32 -lcomdlg32 -ld2d1 -ldwrite -lole32 -loleaut32 -loleacc -luuid -lwindowscodecs
   MESON_SETUP_ARGS += -Ddefault_library=static
+  LINK := $(CXX)
 else ifneq (,$(findstring MINGW,$(OS_UNAME)))
   SRC_PLATFORM := windows.c
   PLATFORM_CFLAGS :=
   PLATFORM_LDFLAGS := -lshell32 -luser32 -lkernel32 -lgdi32 -lcomctl32 -luxtheme -lmsimg32 -lcomdlg32 -ld2d1 -ldwrite -lole32 -loleaut32 -loleacc -luuid -lwindowscodecs
   MESON_SETUP_ARGS += -Ddefault_library=static
+  LINK := $(CXX)
 else ifneq (,$(findstring MSYS,$(OS_UNAME)))
   SRC_PLATFORM := windows.c
   PLATFORM_CFLAGS :=
   PLATFORM_LDFLAGS := -lshell32 -luser32 -lkernel32 -lgdi32 -lcomctl32 -luxtheme -lmsimg32 -lcomdlg32 -ld2d1 -ldwrite -lole32 -loleaut32 -loleacc -luuid -lwindowscodecs
   MESON_SETUP_ARGS += -Ddefault_library=static
+  LINK := $(CXX)
 else
   $(error Unsupported platform: $(OS_UNAME) (set SRC_PLATFORM manually))
 endif
@@ -110,7 +115,7 @@ libui: $(LIBUI_SHLIB)
 endif
 
 $(TARGET): $(OBJ) $(LIBUI_DEPS)
-	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(LIBUI_LDFLAGS)
+	$(LINK) $(LDFLAGS) -o $@ $(OBJ) $(LIBUI_LDFLAGS)
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
