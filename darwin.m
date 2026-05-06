@@ -149,6 +149,22 @@ int platform_user_config_path(char *buf, size_t buf_size)
 	return 0;
 }
 
+int platform_user_state_path(char *buf, size_t buf_size)
+{
+	const char *home;
+
+	if (buf == NULL || buf_size == 0)
+		return -1;
+	home = getenv("HOME");
+	if (home == NULL || home[0] == '\0')
+		return -1;
+	if (snprintf(buf, buf_size,
+	    "%s/Library/Application Support/clipboard-manager/history.bin",
+	    home) >= (int)buf_size)
+		return -1;
+	return 0;
+}
+
 int platform_ensure_config_parent(const char *utf8_path)
 {
 	NSString *path;
@@ -167,6 +183,11 @@ int platform_ensure_config_parent(const char *utf8_path)
 	    withIntermediateDirectories:YES attributes:nil error:&err])
 		return -1;
 	return 0;
+}
+
+int platform_ensure_state_parent(const char *utf8_path)
+{
+	return platform_ensure_config_parent(utf8_path);
 }
 
 static platform_tray_show_cb s_darwin_show;
@@ -244,5 +265,64 @@ int platform_bind_hotkey_entry(uiEntry *entry, platform_hotkey_arm_cb arm_cb,
 	(void)arm_cb;
 	(void)commit_cb;
 	(void)userdata;
+	return -1;
+}
+
+int platform_global_hotkey_set(const char *hotkey,
+	platform_global_hotkey_cb on_hotkey, void *userdata, char *errbuf,
+	size_t errbuf_size)
+{
+	(void)hotkey;
+	(void)on_hotkey;
+	(void)userdata;
+	if (errbuf != NULL && errbuf_size > 0)
+		snprintf(errbuf, errbuf_size,
+			"Global hotkey is not implemented on macOS yet.");
+	return -1;
+}
+
+void platform_global_hotkey_clear(void)
+{
+}
+
+int platform_quick_picker_show(const platform_picker_item *items, size_t count,
+	platform_picker_choose_cb choose_cb, platform_picker_cancel_cb cancel_cb,
+	void *userdata)
+{
+	(void)items;
+	(void)count;
+	(void)choose_cb;
+	(void)cancel_cb;
+	(void)userdata;
+	return -1;
+}
+
+void platform_quick_picker_hide(void)
+{
+}
+
+int platform_simulate_paste(void)
+{
+	return -1;
+}
+
+int platform_ipc_server_start(platform_ipc_picker_cb on_picker, void *userdata,
+	char *errbuf, size_t errbuf_size)
+{
+	(void)on_picker;
+	(void)userdata;
+	if (errbuf != NULL && errbuf_size > 0)
+		snprintf(errbuf, errbuf_size, "IPC server is not implemented on macOS.");
+	return -1;
+}
+
+void platform_ipc_server_stop(void)
+{
+}
+
+int platform_ipc_request_picker(char *errbuf, size_t errbuf_size)
+{
+	if (errbuf != NULL && errbuf_size > 0)
+		snprintf(errbuf, errbuf_size, "IPC client is not implemented on macOS.");
 	return -1;
 }

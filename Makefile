@@ -19,8 +19,8 @@ SRC_COMMON := main.c core.c
 
 ifeq ($(OS_UNAME),Linux)
   SRC_PLATFORM := linux.c
-  PLATFORM_CFLAGS := $(shell pkg-config --cflags gtk+-3.0 x11)
-  PLATFORM_LDFLAGS := $(shell pkg-config --libs gtk+-3.0 x11)
+  PLATFORM_CFLAGS := $(shell pkg-config --cflags gtk+-3.0 x11 xtst)
+  PLATFORM_LDFLAGS := $(shell pkg-config --libs gtk+-3.0 x11 xtst)
 else ifeq ($(OS_UNAME),Darwin)
   SRC_PLATFORM := darwin.m
   PLATFORM_CFLAGS :=

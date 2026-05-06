@@ -8,16 +8,22 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 #include <gdk/gdk.h>
 #include <gtk/gtk.h>
+#include <glib-unix.h>
 #include <gdk/gdkkeysyms.h>
 #ifdef GDK_WINDOWING_X11
 #include <gdk/gdkx.h>
 #include <X11/Xatom.h>
+#include <X11/extensions/XTest.h>
+#include <X11/keysym.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #endif
@@ -300,6 +306,31 @@ int platform_user_config_path(char *buf, size_t buf_size)
 	return -1;
 }
 
+int platform_user_state_path(char *buf, size_t buf_size)
+{
+	const char *st;
+	const char *home;
+
+	if (buf == NULL || buf_size == 0)
+		return -1;
+	st = getenv("XDG_STATE_HOME");
+	if (st != NULL && st[0] != '\0') {
+		if (snprintf(buf, buf_size, "%s/clipboard-manager/history.bin", st) >=
+		    (int)buf_size)
+			return -1;
+		return 0;
+	}
+	home = getenv("HOME");
+	if (home != NULL && home[0] != '\0') {
+		if (snprintf(buf, buf_size,
+		    "%s/.local/state/clipboard-manager/history.bin", home) >=
+		    (int)buf_size)
+			return -1;
+		return 0;
+	}
+	return -1;
+}
+
 static int mkdir_p(char *path)
 {
 	char *p;
@@ -342,6 +373,11 @@ int platform_ensure_config_parent(const char *utf8_path)
 	}
 	free(copy);
 	return 0;
+}
+
+int platform_ensure_state_parent(const char *utf8_path)
+{
+	return platform_ensure_config_parent(utf8_path);
 }
 
 static platform_tray_show_cb s_tray_show;
@@ -567,6 +603,653 @@ void platform_tray_shutdown(void)
 	s_tray_show = NULL;
 	s_tray_quit = NULL;
 	s_tray_ud = NULL;
+}
+
+static platform_global_hotkey_cb s_hotkey_cb;
+static void *s_hotkey_ud;
+#ifdef GDK_WINDOWING_X11
+static Display *s_hotkey_dpy;
+static Window s_hotkey_root;
+static unsigned int s_hotkey_mods;
+static unsigned int s_hotkey_lock_mask;
+static int s_hotkey_keycode;
+static int s_hotkey_active;
+static int s_hotkey_grab_failed;
+#endif
+
+static void write_err(char *buf, size_t buf_size, const char *msg)
+{
+	if (buf == NULL || buf_size == 0)
+		return;
+	snprintf(buf, buf_size, "%s", msg);
+}
+
+static KeySym parse_hotkey_key(const char *name)
+{
+	if (name == NULL || name[0] == '\0')
+		return NoSymbol;
+	if (strlen(name) == 1) {
+		char ch[2];
+		ch[0] = name[0];
+		ch[1] = '\0';
+		return XStringToKeysym(ch);
+	}
+	if (strcasecmp(name, "Escape") == 0)
+		return XK_Escape;
+	if (strcasecmp(name, "Delete") == 0)
+		return XK_Delete;
+	if (strcasecmp(name, "Insert") == 0)
+		return XK_Insert;
+	if (strcasecmp(name, "Home") == 0)
+		return XK_Home;
+	if (strcasecmp(name, "End") == 0)
+		return XK_End;
+	if (strcasecmp(name, "PageUp") == 0)
+		return XK_Page_Up;
+	if (strcasecmp(name, "PageDown") == 0)
+		return XK_Page_Down;
+	if (strcasecmp(name, "Up") == 0)
+		return XK_Up;
+	if (strcasecmp(name, "Down") == 0)
+		return XK_Down;
+	if (strcasecmp(name, "Left") == 0)
+		return XK_Left;
+	if (strcasecmp(name, "Right") == 0)
+		return XK_Right;
+	if (name[0] == 'F' && name[1] != '\0') {
+		int n = atoi(name + 1);
+		if (n >= 1 && n <= 12)
+			return XK_F1 + (n - 1);
+	}
+	return XStringToKeysym(name);
+}
+
+static int parse_hotkey_spec(const char *hotkey, unsigned int *mods_out,
+	KeySym *keysym_out)
+{
+	char *copy;
+	char *tok;
+	char *saveptr;
+	unsigned int mods;
+	KeySym keysym;
+
+	if (hotkey == NULL || hotkey[0] == '\0' || mods_out == NULL ||
+	    keysym_out == NULL)
+		return -1;
+	copy = strdup(hotkey);
+	if (copy == NULL)
+		return -1;
+	mods = 0U;
+	keysym = NoSymbol;
+	for (tok = strtok_r(copy, "+", &saveptr); tok != NULL;
+	     tok = strtok_r(NULL, "+", &saveptr)) {
+		if (strcasecmp(tok, "Ctrl") == 0 ||
+		    strcasecmp(tok, "Control") == 0) {
+			mods |= ControlMask;
+			continue;
+		}
+		if (strcasecmp(tok, "Alt") == 0 ||
+		    strcasecmp(tok, "Mod1") == 0) {
+			mods |= Mod1Mask;
+			continue;
+		}
+		if (strcasecmp(tok, "Shift") == 0) {
+			mods |= ShiftMask;
+			continue;
+		}
+		if (strcasecmp(tok, "Super") == 0 ||
+		    strcasecmp(tok, "Meta") == 0) {
+			mods |= Mod4Mask;
+			continue;
+		}
+		keysym = parse_hotkey_key(tok);
+	}
+	free(copy);
+	if (keysym == NoSymbol)
+		return -1;
+	*mods_out = mods;
+	*keysym_out = keysym;
+	return 0;
+}
+
+#ifdef GDK_WINDOWING_X11
+static int x11_hotkey_error_handler(Display *dpy, XErrorEvent *ee)
+{
+	(void)dpy;
+	if (ee != NULL && ee->error_code == BadAccess)
+		s_hotkey_grab_failed = 1;
+	return 0;
+}
+
+static unsigned int x11_numlock_mask(Display *dpy)
+{
+	XModifierKeymap *modmap;
+	unsigned int mask;
+	int mod;
+	int key;
+
+	modmap = XGetModifierMapping(dpy);
+	if (modmap == NULL)
+		return 0U;
+	mask = 0U;
+	for (mod = 0; mod < 8; mod++) {
+		for (key = 0; key < modmap->max_keypermod; key++) {
+			KeyCode code = modmap->modifiermap[mod * modmap->max_keypermod + key];
+			KeySym sym;
+			KeySym *map;
+			int nsyms;
+			if (code == 0)
+				continue;
+			map = XGetKeyboardMapping(dpy, code, 1, &nsyms);
+			sym = (map != NULL && nsyms > 0) ? map[0] : NoSymbol;
+			if (map != NULL)
+				XFree(map);
+			if (sym == XK_Num_Lock) {
+				mask = (unsigned int)(1U << mod);
+				break;
+			}
+		}
+		if (mask != 0U)
+			break;
+	}
+	XFreeModifiermap(modmap);
+	return mask;
+}
+
+static void x11_grab_hotkey(Display *dpy, Window root, int keycode,
+	unsigned int mods, unsigned int lock_mask)
+{
+	unsigned int variants[4];
+	size_t i;
+
+	variants[0] = mods;
+	variants[1] = mods | LockMask;
+	variants[2] = mods | lock_mask;
+	variants[3] = mods | lock_mask | LockMask;
+	for (i = 0; i < sizeof variants / sizeof variants[0]; i++) {
+		XGrabKey(dpy, keycode, variants[i], root, True, GrabModeAsync,
+			GrabModeAsync);
+	}
+}
+
+static void x11_ungrab_hotkey(Display *dpy, Window root, int keycode,
+	unsigned int mods, unsigned int lock_mask)
+{
+	unsigned int variants[4];
+	size_t i;
+
+	variants[0] = mods;
+	variants[1] = mods | LockMask;
+	variants[2] = mods | lock_mask;
+	variants[3] = mods | lock_mask | LockMask;
+	for (i = 0; i < sizeof variants / sizeof variants[0]; i++)
+		XUngrabKey(dpy, keycode, variants[i], root);
+}
+
+static GdkFilterReturn global_hotkey_filter(GdkXEvent *xevent, GdkEvent *event,
+	gpointer data)
+{
+	XEvent *xe;
+	unsigned int clean_state;
+
+	(void)event;
+	(void)data;
+	if (!s_hotkey_active || s_hotkey_cb == NULL)
+		return GDK_FILTER_CONTINUE;
+	xe = (XEvent *)xevent;
+	if (xe == NULL || xe->type != KeyPress)
+		return GDK_FILTER_CONTINUE;
+	clean_state = (unsigned int)xe->xkey.state & ~(LockMask | s_hotkey_lock_mask);
+	if (xe->xkey.keycode != (unsigned int)s_hotkey_keycode ||
+	    clean_state != s_hotkey_mods)
+		return GDK_FILTER_CONTINUE;
+	s_hotkey_cb(s_hotkey_ud);
+	return GDK_FILTER_REMOVE;
+}
+#endif
+
+void platform_global_hotkey_clear(void)
+{
+#ifdef GDK_WINDOWING_X11
+	if (s_hotkey_active && s_hotkey_dpy != NULL && s_hotkey_root != None &&
+	    s_hotkey_keycode != 0) {
+		x11_ungrab_hotkey(s_hotkey_dpy, s_hotkey_root, s_hotkey_keycode,
+			s_hotkey_mods, s_hotkey_lock_mask);
+		XSync(s_hotkey_dpy, False);
+	}
+	if (gdk_display_get_default() != NULL)
+		gdk_window_remove_filter(NULL, global_hotkey_filter, NULL);
+	s_hotkey_dpy = NULL;
+	s_hotkey_root = None;
+	s_hotkey_keycode = 0;
+	s_hotkey_mods = 0U;
+	s_hotkey_lock_mask = 0U;
+	s_hotkey_active = 0;
+#endif
+	s_hotkey_cb = NULL;
+	s_hotkey_ud = NULL;
+}
+
+int platform_global_hotkey_set(const char *hotkey,
+	platform_global_hotkey_cb on_hotkey, void *userdata, char *errbuf,
+	size_t errbuf_size)
+{
+#ifndef GDK_WINDOWING_X11
+	(void)hotkey;
+	(void)on_hotkey;
+	(void)userdata;
+	write_err(errbuf, errbuf_size, "Global hotkey requires X11.");
+	return -1;
+#else
+	GdkDisplay *gd;
+	unsigned int mods;
+	KeySym ks;
+	int keycode;
+	XErrorHandler old_handler;
+
+	if (hotkey == NULL || hotkey[0] == '\0' || on_hotkey == NULL) {
+		write_err(errbuf, errbuf_size, "Empty hotkey.");
+		return -1;
+	}
+	platform_global_hotkey_clear();
+	gd = gdk_display_get_default();
+	if (gd == NULL || !GDK_IS_X11_DISPLAY(gd)) {
+		write_err(errbuf, errbuf_size,
+			"Global hotkey is only supported on Linux X11.");
+		return -1;
+	}
+	if (parse_hotkey_spec(hotkey, &mods, &ks) != 0) {
+		write_err(errbuf, errbuf_size, "Invalid hotkey format.");
+		return -1;
+	}
+	s_hotkey_dpy = gdk_x11_display_get_xdisplay(gd);
+	if (s_hotkey_dpy == NULL) {
+		write_err(errbuf, errbuf_size, "X11 display is unavailable.");
+		return -1;
+	}
+	keycode = XKeysymToKeycode(s_hotkey_dpy, ks);
+	if (keycode == 0) {
+		write_err(errbuf, errbuf_size, "Unsupported hotkey key.");
+		return -1;
+	}
+	s_hotkey_root = DefaultRootWindow(s_hotkey_dpy);
+	s_hotkey_mods = mods;
+	s_hotkey_keycode = keycode;
+	s_hotkey_lock_mask = x11_numlock_mask(s_hotkey_dpy);
+	s_hotkey_grab_failed = 0;
+	old_handler = XSetErrorHandler(x11_hotkey_error_handler);
+	x11_grab_hotkey(s_hotkey_dpy, s_hotkey_root, s_hotkey_keycode, s_hotkey_mods,
+		s_hotkey_lock_mask);
+	XSync(s_hotkey_dpy, False);
+	XSetErrorHandler(old_handler);
+	if (s_hotkey_grab_failed) {
+		write_err(errbuf, errbuf_size,
+			"Hotkey is already used by another application.");
+		platform_global_hotkey_clear();
+		return -1;
+	}
+	gdk_window_add_filter(NULL, global_hotkey_filter, NULL);
+	s_hotkey_cb = on_hotkey;
+	s_hotkey_ud = userdata;
+	s_hotkey_active = 1;
+	write_err(errbuf, errbuf_size, "Global hotkey enabled.");
+	return 0;
+#endif
+}
+
+static GtkWidget *s_picker_win;
+static GtkWidget *s_picker_view;
+static GtkListStore *s_picker_store;
+static platform_picker_choose_cb s_picker_choose_cb;
+static platform_picker_cancel_cb s_picker_cancel_cb;
+static void *s_picker_ud;
+
+static void quick_picker_finish_with_token(uint64_t token)
+{
+	if (s_picker_choose_cb != NULL)
+		s_picker_choose_cb(token, s_picker_ud);
+}
+
+static gboolean quick_picker_on_key(GtkWidget *widget, GdkEventKey *event,
+	gpointer data)
+{
+	GtkTreeSelection *sel;
+	GtkTreeModel *model;
+	GtkTreeIter it;
+	guint64 token;
+
+	(void)data;
+	if (event == NULL)
+		return GDK_EVENT_PROPAGATE;
+	if (event->keyval == GDK_KEY_Escape) {
+		if (s_picker_cancel_cb != NULL)
+			s_picker_cancel_cb(s_picker_ud);
+		return GDK_EVENT_STOP;
+	}
+	if (event->keyval != GDK_KEY_Return && event->keyval != GDK_KEY_KP_Enter)
+		return GDK_EVENT_PROPAGATE;
+	sel = gtk_tree_view_get_selection(GTK_TREE_VIEW(widget));
+	if (!gtk_tree_selection_get_selected(sel, &model, &it))
+		return GDK_EVENT_STOP;
+	gtk_tree_model_get(model, &it, 1, &token, -1);
+	quick_picker_finish_with_token((uint64_t)token);
+	return GDK_EVENT_STOP;
+}
+
+static void quick_picker_on_row_activated(GtkTreeView *tree_view,
+	GtkTreePath *path, GtkTreeViewColumn *column, gpointer data)
+{
+	GtkTreeModel *model;
+	GtkTreeIter it;
+	guint64 token;
+
+	(void)tree_view;
+	(void)column;
+	(void)data;
+	model = GTK_TREE_MODEL(s_picker_store);
+	if (path == NULL || !gtk_tree_model_get_iter(model, &it, path))
+		return;
+	gtk_tree_model_get(model, &it, 1, &token, -1);
+	quick_picker_finish_with_token((uint64_t)token);
+}
+
+static gboolean quick_picker_on_focus_out(GtkWidget *widget, GdkEvent *event,
+	gpointer data)
+{
+	(void)widget;
+	(void)event;
+	(void)data;
+	if (s_picker_cancel_cb != NULL)
+		s_picker_cancel_cb(s_picker_ud);
+	return GDK_EVENT_PROPAGATE;
+}
+
+void platform_quick_picker_hide(void)
+{
+	if (s_picker_win != NULL) {
+		gtk_widget_destroy(s_picker_win);
+		s_picker_win = NULL;
+	}
+	s_picker_view = NULL;
+	s_picker_store = NULL;
+	s_picker_choose_cb = NULL;
+	s_picker_cancel_cb = NULL;
+	s_picker_ud = NULL;
+}
+
+int platform_quick_picker_show(const platform_picker_item *items, size_t count,
+	platform_picker_choose_cb choose_cb, platform_picker_cancel_cb cancel_cb,
+	void *userdata)
+{
+	GtkWidget *scroll;
+	GtkCellRenderer *renderer;
+	GtkTreeViewColumn *col;
+	GdkDisplay *display;
+	GdkSeat *seat;
+	GdkDevice *pointer;
+	gint cx;
+	gint cy;
+	GtkTreeSelection *sel;
+	GtkTreeIter it;
+	size_t i;
+
+	if (items == NULL || count == 0 || choose_cb == NULL)
+		return -1;
+	platform_quick_picker_hide();
+	s_picker_choose_cb = choose_cb;
+	s_picker_cancel_cb = cancel_cb;
+	s_picker_ud = userdata;
+	s_picker_win = gtk_window_new(GTK_WINDOW_POPUP);
+	gtk_window_set_decorated(GTK_WINDOW(s_picker_win), FALSE);
+	gtk_window_set_keep_above(GTK_WINDOW(s_picker_win), TRUE);
+	gtk_window_set_default_size(GTK_WINDOW(s_picker_win), 420, 280);
+	scroll = gtk_scrolled_window_new(NULL, NULL);
+	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),
+		GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+	s_picker_store = gtk_list_store_new(2, G_TYPE_STRING, G_TYPE_UINT64);
+	for (i = 0; i < count; i++) {
+		gtk_list_store_append(s_picker_store, &it);
+		gtk_list_store_set(s_picker_store, &it,
+			0, items[i].label != NULL ? items[i].label : "",
+			1, (guint64)items[i].token,
+			-1);
+	}
+	s_picker_view = gtk_tree_view_new_with_model(GTK_TREE_MODEL(s_picker_store));
+	gtk_tree_view_set_headers_visible(GTK_TREE_VIEW(s_picker_view), FALSE);
+	gtk_tree_view_set_activate_on_single_click(GTK_TREE_VIEW(s_picker_view), TRUE);
+	renderer = gtk_cell_renderer_text_new();
+	col = gtk_tree_view_column_new_with_attributes("Item", renderer, "text", 0,
+		NULL);
+	gtk_tree_view_append_column(GTK_TREE_VIEW(s_picker_view), col);
+	gtk_container_add(GTK_CONTAINER(scroll), s_picker_view);
+	gtk_container_add(GTK_CONTAINER(s_picker_win), scroll);
+	g_signal_connect(s_picker_view, "row-activated",
+		G_CALLBACK(quick_picker_on_row_activated), NULL);
+	g_signal_connect(s_picker_view, "key-press-event",
+		G_CALLBACK(quick_picker_on_key), NULL);
+	g_signal_connect(s_picker_win, "focus-out-event",
+		G_CALLBACK(quick_picker_on_focus_out), NULL);
+	gtk_widget_show_all(s_picker_win);
+	display = gdk_display_get_default();
+	cx = 120;
+	cy = 120;
+	if (display != NULL) {
+		seat = gdk_display_get_default_seat(display);
+		if (seat != NULL) {
+			pointer = gdk_seat_get_pointer(seat);
+			if (pointer != NULL)
+				gdk_device_get_position(pointer, NULL, &cx, &cy);
+		}
+	}
+	gtk_window_move(GTK_WINDOW(s_picker_win), cx + 8, cy + 8);
+	sel = gtk_tree_view_get_selection(GTK_TREE_VIEW(s_picker_view));
+	gtk_tree_selection_set_mode(sel, GTK_SELECTION_BROWSE);
+	if (gtk_tree_model_get_iter_first(GTK_TREE_MODEL(s_picker_store), &it))
+		gtk_tree_selection_select_iter(sel, &it);
+	gtk_widget_grab_focus(s_picker_view);
+	return 0;
+}
+
+int platform_simulate_paste(void)
+{
+#ifdef GDK_WINDOWING_X11
+	GdkDisplay *gd;
+	Display *dpy;
+	KeyCode ctrl;
+	KeyCode v;
+	int event_base;
+	int error_base;
+	int major;
+	int minor;
+
+	gd = gdk_display_get_default();
+	if (gd == NULL || !GDK_IS_X11_DISPLAY(gd))
+		return -1;
+	dpy = gdk_x11_display_get_xdisplay(gd);
+	if (dpy == NULL)
+		return -1;
+	if (!XTestQueryExtension(dpy, &event_base, &error_base, &major, &minor))
+		return -1;
+	ctrl = XKeysymToKeycode(dpy, XK_Control_L);
+	v = XKeysymToKeycode(dpy, XK_v);
+	if (ctrl == 0 || v == 0)
+		return -1;
+	XTestFakeKeyEvent(dpy, ctrl, True, CurrentTime);
+	XTestFakeKeyEvent(dpy, v, True, CurrentTime);
+	XTestFakeKeyEvent(dpy, v, False, CurrentTime);
+	XTestFakeKeyEvent(dpy, ctrl, False, CurrentTime);
+	XFlush(dpy);
+	return 0;
+#else
+	return -1;
+#endif
+}
+
+static int s_ipc_fd = -1;
+static guint s_ipc_source_id;
+static char s_ipc_path[108];
+static platform_ipc_picker_cb s_ipc_picker_cb;
+static void *s_ipc_ud;
+
+static void ipc_write_err(char *buf, size_t buf_size, const char *msg)
+{
+	write_err(buf, buf_size, msg);
+}
+
+static int ipc_build_path(char *buf, size_t buf_size)
+{
+	const char *rt;
+	uid_t uid;
+
+	if (buf == NULL || buf_size == 0)
+		return -1;
+	rt = getenv("XDG_RUNTIME_DIR");
+	if (rt != NULL && rt[0] != '\0') {
+		if (snprintf(buf, buf_size, "%s/clipboard-manager.sock", rt) >=
+		    (int)buf_size)
+			return -1;
+		return 0;
+	}
+	uid = getuid();
+	if (snprintf(buf, buf_size, "/tmp/clipboard-manager-%lu.sock",
+		(unsigned long)uid) >= (int)buf_size)
+		return -1;
+	return 0;
+}
+
+static gboolean ipc_on_io(gint fd, GIOCondition cond, gpointer data)
+{
+	int cfd;
+	char buf[64];
+	ssize_t n;
+	struct sockaddr_un addr;
+	socklen_t alen;
+
+	(void)data;
+	if ((cond & (G_IO_HUP | G_IO_ERR)) != 0)
+		return G_SOURCE_CONTINUE;
+	if ((cond & G_IO_IN) == 0)
+		return G_SOURCE_CONTINUE;
+	for (;;) {
+		alen = sizeof addr;
+		cfd = accept(fd, (struct sockaddr *)&addr, &alen);
+		if (cfd < 0) {
+			if (errno == EAGAIN || errno == EWOULDBLOCK)
+				break;
+			break;
+		}
+		n = read(cfd, buf, sizeof buf - 1);
+		if (n > 0) {
+			buf[n] = '\0';
+			if (strncmp(buf, "picker", 6) == 0 && s_ipc_picker_cb != NULL)
+				s_ipc_picker_cb(s_ipc_ud);
+		}
+		close(cfd);
+	}
+	return G_SOURCE_CONTINUE;
+}
+
+void platform_ipc_server_stop(void)
+{
+	if (s_ipc_source_id != 0) {
+		g_source_remove(s_ipc_source_id);
+		s_ipc_source_id = 0;
+	}
+	if (s_ipc_fd >= 0) {
+		close(s_ipc_fd);
+		s_ipc_fd = -1;
+	}
+	if (s_ipc_path[0] != '\0') {
+		(void)unlink(s_ipc_path);
+		s_ipc_path[0] = '\0';
+	}
+	s_ipc_picker_cb = NULL;
+	s_ipc_ud = NULL;
+}
+
+int platform_ipc_server_start(platform_ipc_picker_cb on_picker, void *userdata,
+	char *errbuf, size_t errbuf_size)
+{
+	struct sockaddr_un addr;
+	int fd;
+
+	if (on_picker == NULL) {
+		ipc_write_err(errbuf, errbuf_size, "IPC picker callback missing.");
+		return -1;
+	}
+	platform_ipc_server_stop();
+	if (ipc_build_path(s_ipc_path, sizeof s_ipc_path) != 0) {
+		ipc_write_err(errbuf, errbuf_size, "Failed to determine IPC path.");
+		return -1;
+	}
+	fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0);
+	if (fd < 0) {
+		ipc_write_err(errbuf, errbuf_size, "Failed to create IPC socket.");
+		s_ipc_path[0] = '\0';
+		return -1;
+	}
+	memset(&addr, 0, sizeof addr);
+	addr.sun_family = AF_UNIX;
+	snprintf(addr.sun_path, sizeof addr.sun_path, "%s", s_ipc_path);
+	(void)unlink(s_ipc_path);
+	if (bind(fd, (struct sockaddr *)&addr, sizeof addr) != 0) {
+		close(fd);
+		s_ipc_path[0] = '\0';
+		ipc_write_err(errbuf, errbuf_size,
+			"Failed to bind IPC socket (already running?).");
+		return -1;
+	}
+	if (listen(fd, 8) != 0) {
+		close(fd);
+		(void)unlink(s_ipc_path);
+		s_ipc_path[0] = '\0';
+		ipc_write_err(errbuf, errbuf_size, "Failed to listen on IPC socket.");
+		return -1;
+	}
+	s_ipc_fd = fd;
+	s_ipc_picker_cb = on_picker;
+	s_ipc_ud = userdata;
+	s_ipc_source_id = g_unix_fd_add(s_ipc_fd, G_IO_IN | G_IO_ERR | G_IO_HUP,
+		ipc_on_io, NULL);
+	ipc_write_err(errbuf, errbuf_size, "IPC server enabled.");
+	return 0;
+}
+
+int platform_ipc_request_picker(char *errbuf, size_t errbuf_size)
+{
+	char path[108];
+	struct sockaddr_un addr;
+	int fd;
+	int r;
+	ssize_t n;
+	const char *msg = "picker\n";
+
+	if (ipc_build_path(path, sizeof path) != 0) {
+		ipc_write_err(errbuf, errbuf_size, "Failed to determine IPC path.");
+		return -1;
+	}
+	fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (fd < 0) {
+		ipc_write_err(errbuf, errbuf_size, "Failed to create IPC client socket.");
+		return -1;
+	}
+	memset(&addr, 0, sizeof addr);
+	addr.sun_family = AF_UNIX;
+	snprintf(addr.sun_path, sizeof addr.sun_path, "%s", path);
+	r = connect(fd, (struct sockaddr *)&addr, sizeof addr);
+	if (r != 0) {
+		close(fd);
+		ipc_write_err(errbuf, errbuf_size, "No running instance (IPC connect failed).");
+		return -1;
+	}
+	n = write(fd, msg, strlen(msg));
+	close(fd);
+	if (n <= 0) {
+		ipc_write_err(errbuf, errbuf_size, "Failed to send IPC request.");
+		return -1;
+	}
+	ipc_write_err(errbuf, errbuf_size, "Picker requested.");
+	return 0;
 }
 
 typedef struct hotkey_bind_data {

@@ -27,8 +27,15 @@ typedef struct clip_store clip_store;
 #define CLIP_PREVIEW_MAX_BYTES 120
 #define CLIP_HOTKEY_MAX 127
 
+/* Max UTF-8 bytes stored per clipboard text entry (default and clamp range). */
+#define CLIP_TEXT_BYTES_DEFAULT 10000U
+#define CLIP_TEXT_BYTES_MIN 256U
+#define CLIP_TEXT_BYTES_MAX (1U << 20)
+
 typedef struct clip_app_config {
 	size_t max_items;
+	size_t max_clipboard_bytes;
+	int persist_history;
 	char hotkey[CLIP_HOTKEY_MAX + 1];
 } clip_app_config;
 
@@ -43,6 +50,13 @@ size_t clip_store_get_max_items(const clip_store *s);
  * clip_store_count after the call).
  */
 size_t clip_store_set_max_items(clip_store *s, size_t max_items);
+
+/*
+ * Clamps to [CLIP_TEXT_BYTES_MIN, CLIP_TEXT_BYTES_MAX]. Applies to new captures
+ * and to serialization; existing in-memory entries are not shortened.
+ */
+void clip_store_set_max_clipboard_bytes(clip_store *s, size_t max_bytes);
+size_t clip_store_get_max_clipboard_bytes(const clip_store *s);
 
 const clip_item *clip_store_get(const clip_store *s, size_t index);
 
@@ -73,5 +87,15 @@ void clip_config_default(clip_app_config *cfg);
  */
 int clip_config_load(const char *path, clip_app_config *cfg);
 int clip_config_save(const char *path, const clip_app_config *cfg);
+
+/*
+ * Binary history format (little-endian). Atomic replace: writes path.tmp then
+ * renames. On Unix the final file is chmod 0600. Returns 0 on success.
+ */
+int clip_history_save(const clip_store *s, const char *path);
+/* Replaces store contents; returns 0 on success, -1 on missing/corrupt file. */
+int clip_history_load(clip_store *s, const char *path);
+/* Deletes the history file if it exists (e.g. when persistence is turned off). */
+int clip_history_delete_file(const char *path);
 
 #endif
