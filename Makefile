@@ -7,6 +7,7 @@ LIBUI_OUT := $(LIBUI_BUILD)/meson-out
 
 MESON ?= meson
 NINJA ?= ninja
+MESON_SETUP_ARGS := --buildtype=release -Dtests=false -Dexamples=false
 
 CC ?= cc
 CFLAGS ?= -std=c11 -Wall -Wextra -O2 -pipe
@@ -28,15 +29,18 @@ else ifeq ($(OS_UNAME),Darwin)
 else ifeq ($(OS_MAKE),Windows_NT)
   SRC_PLATFORM := windows.c
   PLATFORM_CFLAGS :=
-  PLATFORM_LDFLAGS := -lshell32
+  PLATFORM_LDFLAGS := -lshell32 -luser32 -lkernel32 -lgdi32 -lcomctl32 -luxtheme -lmsimg32 -lcomdlg32 -ld2d1 -ldwrite -lole32 -loleaut32 -loleacc -luuid -lwindowscodecs
+  MESON_SETUP_ARGS += -Ddefault_library=static
 else ifneq (,$(findstring MINGW,$(OS_UNAME)))
   SRC_PLATFORM := windows.c
   PLATFORM_CFLAGS :=
-  PLATFORM_LDFLAGS := -lshell32
+  PLATFORM_LDFLAGS := -lshell32 -luser32 -lkernel32 -lgdi32 -lcomctl32 -luxtheme -lmsimg32 -lcomdlg32 -ld2d1 -ldwrite -lole32 -loleaut32 -loleacc -luuid -lwindowscodecs
+  MESON_SETUP_ARGS += -Ddefault_library=static
 else ifneq (,$(findstring MSYS,$(OS_UNAME)))
   SRC_PLATFORM := windows.c
   PLATFORM_CFLAGS :=
-  PLATFORM_LDFLAGS := -lshell32
+  PLATFORM_LDFLAGS := -lshell32 -luser32 -lkernel32 -lgdi32 -lcomctl32 -luxtheme -lmsimg32 -lcomdlg32 -ld2d1 -ldwrite -lole32 -loleaut32 -loleacc -luuid -lwindowscodecs
+  MESON_SETUP_ARGS += -Ddefault_library=static
 else
   $(error Unsupported platform: $(OS_UNAME) (set SRC_PLATFORM manually))
 endif
@@ -59,7 +63,7 @@ ifeq ($(OS_UNAME),Darwin)
   LIBUI_SHLIB := $(LIBUI_OUT)/libui.dylib
   LIBUI_RPATH := -Wl,-rpath,@loader_path/../vendors/libui-ng/build/meson-out
 else ifneq (,$(filter Windows_NT MINGW% MSYS%,$(OS_MAKE) $(OS_UNAME)))
-  LIBUI_SHLIB := $(LIBUI_OUT)/libui.dll
+  LIBUI_SHLIB := $(LIBUI_OUT)/libui.a
   LIBUI_RPATH :=
 else
   LIBUI_SHLIB := $(LIBUI_OUT)/libui.so
@@ -94,15 +98,9 @@ else
 $(LIBUI_BUILD)/build.ninja: $(LIBUI_VENDOR)/meson.build
 	cd $(LIBUI_VENDOR) && \
 	if [ -f build/build.ninja ]; then \
-		$(MESON) setup build --reconfigure \
-			--buildtype=release \
-			-Dtests=false \
-			-Dexamples=false; \
+		$(MESON) setup build --reconfigure $(MESON_SETUP_ARGS); \
 	else \
-		$(MESON) setup build \
-			--buildtype=release \
-			-Dtests=false \
-			-Dexamples=false; \
+		$(MESON) setup build $(MESON_SETUP_ARGS); \
 	fi
 
 $(LIBUI_SHLIB): $(LIBUI_BUILD)/build.ninja

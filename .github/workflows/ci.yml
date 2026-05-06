@@ -94,7 +94,7 @@ jobs:
 
       - name: Build
         shell: msys2 {0}
-        run: make
+        run: make CC=x86_64-w64-mingw32-gcc
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
@@ -102,5 +102,4 @@ jobs:
           name: clipboard-manager-windows
           path: |
             build/clipboard-manager.exe
-            vendors/libui-ng/build/meson-out/libui.dll
           if-no-files-found: error

@@ -73,14 +73,13 @@ jobs:
 
       - name: Build
         shell: msys2 {0}
-        run: make
+        run: make CC=x86_64-w64-mingw32-gcc
 
       - name: Package Windows release
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dist -Force | Out-Null
           Copy-Item build/clipboard-manager.exe dist/
-          Copy-Item vendors/libui-ng/build/meson-out/libui.dll dist/
           Compress-Archive -Path dist/* -DestinationPath clipboard-manager-windows.zip -Force
           $hash = (Get-FileHash clipboard-manager-windows.zip -Algorithm SHA256).Hash.ToLower()
           "$hash  clipboard-manager-windows.zip" | Out-File -Encoding ascii clipboard-manager-windows.zip.sha256
